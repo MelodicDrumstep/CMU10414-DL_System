@@ -1,4 +1,4 @@
-//#define TEST
+#define TEST
 
 #ifdef TEST
 #include <pybind11/pybind11.h>
@@ -12,7 +12,7 @@
 namespace py = pybind11;
 #endif
 
-#define DEBUG
+//#define DEBUG
 
 float * make_Z(const float * X, float * theta, size_t m, size_t n, size_t k);
 float * make_I(const unsigned char * y, size_t m, size_t k);
@@ -147,10 +147,19 @@ float * make_Z(const float * X, float * theta, size_t m, size_t n, size_t k)
             float x = X[i * n + l];
             for(int j = 0; j < k; j++)
             {
-                Z[i * k + j] += exp(x * theta[l * k + j]);
+                Z[i * k + j] += x * theta[l * k + j];
             }
         }
     }
+
+    for(int i = 0; i < m; i++)
+    {
+        for(int j = 0; j < k; j++)
+        {
+            Z[i * k + j] = exp(Z[i * k + j]);
+        }
+    }
+    
     //normalization: 
     for(int i = 0; i < m; i++)
     {
@@ -210,6 +219,91 @@ PYBIND11_MODULE(simple_ml_ext, m) {
 }
 #endif
 
+#ifdef DEBUG
+
+#include <cassert>
+#include <cstring>
+#include <vector>
+#include <algorithm>
+
+// Helper function to compare arrays
+template <typename T>
+bool compare_arrays(const T* a, const T* b, size_t size, T epsilon = 1e-5) 
+{
+    return std::equal(a, a + size, b, [epsilon](T x, T y) { return std::fabs(x - y) < epsilon; });
+}
+
+// Unit test for make_Z function
+void test_make_Z() {
+    // Set up test data
+    size_t m = 2; // number of examples
+    size_t n = 2; // input dimensions
+    size_t k = 2; // number of classes
+    std::vector<float> X = {1.0f, 2.0f, 3.0f, 4.0f}; // m * n
+    std::vector<float> theta = {0.1f, 0.2f, 0.3f, 0.4f}; // n * k
+    std::vector<float> expected_Z = { // Expected Z after softmax
+        std::exp(1.0f * 0.1f + 2.0f * 0.3f), std::exp(1.0f * 0.2f + 2.0f * 0.4f),
+        std::exp(3.0f * 0.1f + 4.0f * 0.3f), std::exp(3.0f * 0.2f + 4.0f * 0.4f)
+    };
+
+    // Normalize expected Z
+    float sum_row1 = expected_Z[0] + expected_Z[1];
+    float sum_row2 = expected_Z[2] + expected_Z[3];
+    expected_Z[0] /= sum_row1;
+    expected_Z[1] /= sum_row1;
+    expected_Z[2] /= sum_row2;
+    expected_Z[3] /= sum_row2;
+
+    float* Z = make_Z(X.data(), theta.data(), m, n, k);
+
+    std::cout << "Z is : " << std::endl;
+
+    for(int i = 0; i < m; i++)
+    {
+        for(int j = 0; j < k; j++)
+        {
+            std::cout << Z[i * k + j] << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    std::cout << "expected Z is : " << std::endl;
+
+    for(int i = 0; i < m; i++)
+    {
+        for(int j = 0; j < k; j++)
+        {
+            std::cout << expected_Z[i * k + j] << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    // Check if the computed Z matches the expected Z
+    std::cout << "the result : " << compare_arrays(Z, expected_Z.data(), m * k) << std::endl;
+    
+    delete[] Z; // Clean up
+
+    std::cout << "test_make_Z passed." << std::endl;
+}
+
+// Unit test for make_I function
+void test_make_I() {
+    // Set up test data
+    size_t m = 2; // number of examples
+    size_t k = 3; // number of classes
+    std::vector<unsigned char> y = {0, 2}; // Class labels
+    std::vector<float> expected_I = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f}; // One-hot encoded labels
+
+    float* I = make_I(y.data(), m, k);
+
+    // Check if the computed I matches the expected I
+    assert(compare_arrays(I, expected_I.data(), m * k));
+
+    delete[] I; // Clean up
+
+    std::cout << "test_make_I passed." << std::endl;
+}
+
 int main()
 {
     size_t m = 2;
@@ -233,5 +327,9 @@ int main()
     {
         theta[i] = 1;
     }
-    softmax_regression_epoch_cpp(X, y, theta, m, n, k, lr, batch);
+    test_make_I();
+    test_make_Z();
 }
+
+
+#endif
