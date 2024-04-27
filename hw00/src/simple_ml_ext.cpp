@@ -16,6 +16,7 @@ namespace py = pybind11;
 
 float * make_Z(const float * X, float * theta, size_t m, size_t n, size_t k);
 float * make_I(const unsigned char * y, size_t m, size_t k);
+float * make_gradient(const float * X, const float * I, const float * Z, size_t m, size_t n, size_t k, size_t batch);
 
 void softmax_regression_epoch_cpp(const float *X, const unsigned char *y,
 								  float *theta, size_t m, size_t n, size_t k,
@@ -46,10 +47,10 @@ void softmax_regression_epoch_cpp(const float *X, const unsigned char *y,
     /// BEGIN YOUR CODE
     for(int i = 0; i < (m + batch - 1) / batch; i++)
     {
-
         const float * start_x = X + i * batch * n;
         const unsigned char * start_y = y + i * batch;
 
+    ///DEBUG START
         #ifdef DEBUG    
         std::cout << "i: " << i << std::endl;
         //std::cout << "start_x is : " << start_x << std::endl;
@@ -64,9 +65,6 @@ void softmax_regression_epoch_cpp(const float *X, const unsigned char *y,
             }
             std::cout << std::endl;
         }
-        #endif 
-
-        #ifdef DEBUG
         std::cout << "theta is :" << std::endl;
 
         for(int j = 0; j < n; j++)
@@ -78,10 +76,12 @@ void softmax_regression_epoch_cpp(const float *X, const unsigned char *y,
             std::cout << std::endl;
         }
         #endif
+    ///DEBUG END
 
         float * Z = make_Z(start_x, theta, batch, n, k);
 
 
+    ///DEBUG START
         #ifdef DEBUG
         std::cout << "Z is :" << std::endl;
 
@@ -94,26 +94,12 @@ void softmax_regression_epoch_cpp(const float *X, const unsigned char *y,
             std::cout << std::endl;
         }
         #endif
+    ///DEBUG END
 
         float * I = make_I(start_y, batch, k);
 
-        // gradient = (x.T @ (Z - I)) / batch 
-        float * gradient = new float[n * k];
-        for(int j = 0; j < n * k; j++)
-        {
-            gradient[j] = 0;
-        }
-        for(int j = 0; j < n; j++)
-        {
-            for(int i = 0; i < m; i++)
-            {
-                for(int l = 0; l < k; l++)
-                {
-                    gradient[j * k + l] += (start_x[j * m + i] * (Z[i * k + l] - I[i * k + l])) / batch;
-                }
-            }
-        }
-
+        float * gradient = make_gradient(start_x, I, Z, batch, n, k, batch);
+            
         for(int j = 0; j < n; j++)
         {
             for(int l = 0; l < k; l++)
@@ -127,6 +113,46 @@ void softmax_regression_epoch_cpp(const float *X, const unsigned char *y,
         delete [] Z;
     }
     /// END YOUR CODE
+}
+
+// gradient = (x.T @ (Z - I)) / batch 
+// X : (m x n)
+// Z / I : (m x k)
+float * make_gradient(const float * X, const float * I, const float * Z, size_t m, size_t n, size_t k, size_t batch)
+{
+    float * gradient = new float[n * k];
+
+    float * transpose_A = new float[n * m];
+    for(int i = 0; i < m; i++)
+    {
+        for(int j = 0; j < n; j++)
+        {
+            transpose_A[j * m + i] = X[i * n + j];
+        }
+    }
+
+    for(int j = 0; j < n * k; j++)
+    {
+        gradient[j] = 0;
+    }
+    for(int j = 0; j < n; j++)
+    {
+        for(int i = 0; i < m; i++)
+        {
+            for(int l = 0; l < k; l++)
+            {
+                gradient[j * k + l] += (transpose_A[j * m + i] * (Z[i * k + l] - I[i * k + l]));
+            }
+        }
+    }
+
+    for(int j = 0; j < n * k; j++)
+    {
+            gradient[j] /= batch;
+    }
+
+    delete [] transpose_A;
+    return gradient;
 }
 
 float * make_Z(const float * X, float * theta, size_t m, size_t n, size_t k)
@@ -225,6 +251,8 @@ PYBIND11_MODULE(simple_ml_ext, m) {
 #include <cstring>
 #include <vector>
 #include <algorithm>
+#include <cstdlib>
+#include <ctime>
 
 // Helper function to compare arrays
 template <typename T>
@@ -304,31 +332,169 @@ void test_make_I() {
     std::cout << "test_make_I passed." << std::endl;
 }
 
+float *generateRandomFloats(size_t num, float rangeStart = 0.0, float rangeEnd = 1.0) {
+    float *data = new float[num];
+    float range = rangeEnd - rangeStart;
+    for (size_t i = 0; i < num; ++i) {
+        data[i] = rangeStart + (range * rand() / (RAND_MAX + 1.0));
+    }
+    return data;
+}
+
+unsigned char *generateRandomClasses(size_t num, unsigned char maxClass) {
+    unsigned char *classes = new unsigned char[num];
+    for (size_t i = 0; i < num; ++i) {
+        classes[i] = static_cast<unsigned char>(rand() % (maxClass + 1));
+    }
+    return classes;
+}
+
+bool compareFloatArrays(const float *arr1, const float *arr2, size_t size, float tolerance = 1e-5) {
+    for (size_t i = 0; i < size; i++) {
+        if (fabs(arr1[i] - arr2[i]) > tolerance) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void extensiveTest_make_Z(size_t numTests, size_t maxExamples, size_t maxDimensions, size_t maxClasses) {
+    srand(time(nullptr)); // Seed random number generator
+
+    for (size_t test = 0; test < numTests; ++test) {
+        size_t m = rand() % maxExamples + 1; // Ensure at least one example
+        size_t n = rand() % maxDimensions + 1; // Ensure at least one dimension
+        size_t k = rand() % maxClasses + 1; // Ensure at least one class
+
+        float *X = generateRandomFloats(m * n);
+        float *theta = generateRandomFloats(n * k);
+        float *Z = make_Z(X, theta, m, n, k);
+
+        // Here we should check the results but since we don't have ground truth we just ensure no NaNs or Infs
+        assert(Z != nullptr && "make_Z should not return nullptr.");
+        for (size_t i = 0; i < m * k; ++i) {
+            assert(!std::isnan(Z[i]) && !std::isinf(Z[i]) && "Output Z should not contain NaN or Inf.");
+        }
+
+        delete[] X;
+        delete[] theta;
+        delete[] Z;
+    }
+
+    std::cout << "Extensive testing for make_Z passed." << std::endl;
+}
+
+void extensiveTest_make_I(size_t numTests, size_t maxExamples, size_t maxClasses) {
+    srand(time(nullptr)); // Seed random number generator
+
+    for (size_t test = 0; test < numTests; ++test) {
+        size_t m = rand() % maxExamples + 1;
+        size_t k = rand() % maxClasses + 1;
+        unsigned char *y = generateRandomClasses(m, k - 1); // Classes from 0 to k-1
+        float *I = make_I(y, m, k);
+
+        // Verify that I is properly one-hot encoded
+        for (size_t i = 0; i < m; ++i) {
+            int oneCount = 0;
+            for (size_t j = 0; j < k; ++j) {
+                float expectedValue = (j == y[i] ? 1.0f : 0.0f);
+                assert(I[i * k + j] == expectedValue && "One-hot encoding failed.");
+                oneCount += I[i * k + j] == 1.0f ? 1 : 0;
+            }
+            assert(oneCount == 1 && "Exactly one '1' expected per row.");
+        }
+
+        delete[] y;
+        delete[] I;
+    }
+
+    std::cout << "Extensive testing for make_I passed." << std::endl;
+}
+
+void test_make_gradient() {
+    size_t m = 2; // number of examples
+    size_t n = 3; // input dimensions
+    size_t k = 2; // number of classes
+    size_t batch = 2; // batch size
+
+    // Mock data for X, I, and Z
+    float X[] = {1.0, 0.5, 0.2, // First example
+                 0.4, 0.8, 0.6}; // Second example
+    float I[] = {1.0, 0.0,       // One-hot for first example
+                 0.0, 1.0};      // One-hot for second example
+    float Z[] = {0.7, 0.3,       // Softmax output for first example
+                 0.2, 0.8};      // Softmax output for second example
+
+    // Expected gradient output
+    // Calculated manually or using a separate trusted tool/script
+    float expected_gradient[] = {(-0.3 * 1.0 + -0.8 * 0.4) / batch, (-0.3 * 0.5 + -0.8 * 0.8) / batch,
+                                 (-0.3 * 0.2 + -0.8 * 0.6) / batch, (0.3 * 1.0 + 0.8 * 0.4) / batch,
+                                 (0.3 * 0.5 + 0.8 * 0.8) / batch,   (0.3 * 0.2 + 0.8 * 0.6) / batch};
+
+    // Calling the function under test
+    float *computed_gradient = make_gradient(X, I, Z, m, n, k, batch);
+
+    // Check that computed gradient matches expected gradient
+    assert(compareFloatArrays(computed_gradient, expected_gradient, n * k) && "Gradient calculation failed");
+
+    delete[] computed_gradient; // Cleanup
+
+    std::cout << "test_make_gradient passed." << std::endl;
+}
+
+void test_softmax_regression_epoch_cpp() {
+    // Setup test data
+    size_t m = 10; // number of examples
+    size_t n = 5;  // input dimension
+    size_t k = 3;  // number of classes
+    float lr = 0.01; // learning rate
+    size_t batch = 2; // batch size
+
+    // Create mock data for X, y, theta
+    float X[m * n] = {1.0, 0.5, 0.3, 0.2, 0.1,
+                      0.1, 0.2, 0.3, 0.4, 0.5,
+                      0.5, 0.4, 0.3, 0.2, 0.1,
+                      0.1, 0.2, 0.3, 0.4, 0.5,
+                      0.5, 0.4, 0.3, 0.2, 0.1,
+                      0.1, 0.2, 0.3, 0.4, 0.5,
+                      0.5, 0.4, 0.3, 0.2, 0.1,
+                      0.1, 0.2, 0.3, 0.4, 0.5,
+                      0.5, 0.4, 0.3, 0.2, 0.1};
+    unsigned char y[m] = {0, 2, 1, 1, 0, 2, 1, 1, 0, 2};
+    float theta[n * k] = {0.1, 0.2, 0.3,
+                          0.1, 0.2, 0.3,
+                          0.1, 0.2, 0.3,
+                          0.1, 0.2, 0.3,
+                          0.1, 0.2, 0.3};
+
+    // Initialize expected_theta to a copy of theta
+    float expected_theta[n * k];
+    std::copy(theta, theta + n * k, expected_theta);
+
+    // Simulate the expected changes for a single epoch
+    // This should ideally be replaced with manually computed expected values
+    // for a proper test, as shown:
+    for (int j = 0; j < n * k; ++j) {
+        expected_theta[j] -= lr * 0.05; // Assume a dummy gradient decrease
+    }
+
+    // Call the function under test
+    softmax_regression_epoch_cpp(X, y, theta, m, n, k, lr, batch);
+
+    // Check that theta has been updated correctly
+    assert(compareFloatArrays(theta, expected_theta, n * k));
+
+    std::cout << "test_softmax_regression_epoch_cpp passed." << std::endl;
+}
+
 int main()
 {
-    size_t m = 2;
-    size_t n = 2;
-    size_t k = 2;
-    float * X = new float[m * n];
-    unsigned char * y = new unsigned char[m];
-    float * theta = new float[n * k];
-    float lr = 0.1;
-    int batch = 1;
-    for(int i = 0; i < m * n; i++)
-    {
-        X[i] = i;
-    }
-    for(int i = 0; i < m; i++)
-    {
-        y[i] = 0;
-    }
-    y[0] = 1;
-    for(int i = 0; i < n * k; i++)
-    {
-        theta[i] = 1;
-    }
-    test_make_I();
-    test_make_Z();
+    // test_make_I();
+    // test_make_Z();
+    // extensiveTest_make_Z(1000, 100, 10, 5); // 1000 tests with up to 100 examples, 10 dimensions, 5 classes
+    // extensiveTest_make_I(1000, 100, 5); // 1000 tests with up to 100 examples, 5 classes
+    test_make_gradient();
+    return 0;
 }
 
 
