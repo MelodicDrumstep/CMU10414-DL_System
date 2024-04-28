@@ -1,0 +1,1 @@
+python3 ./tests/hw1/test_autograd_hw.py
