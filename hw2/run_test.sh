@@ -1,0 +1,1 @@
+python3 tests/hw2/test_nn_and_optim.py
