@@ -224,16 +224,24 @@ float * make_I(const unsigned char * start_y, size_t m, size_t k)
  */
 PYBIND11_MODULE(simple_ml_ext, m) {
     m.def("softmax_regression_epoch_cpp",
+    // we add a function named "softmax_regression_epoch_cpp" to m
+    // the following is a lambda expression
     	[](py::array_t<float, py::array::c_style> X,
+            // this type corresponding to the numpy array type
+            // type of element is float 
+            // and use C style memory layout
            py::array_t<unsigned char, py::array::c_style> y,
            py::array_t<float, py::array::c_style> theta,
            float lr,
            int batch) {
         softmax_regression_epoch_cpp(
         	static_cast<const float*>(X.request().ptr),
+            /// this will get the pointer of the numpy array X
+            // and cast it to const float *
             static_cast<const unsigned char*>(y.request().ptr),
             static_cast<float*>(theta.request().ptr),
             X.request().shape[0],
+            // get the shape of the numpy array X
             X.request().shape[1],
             theta.request().shape[1],
             lr,
@@ -242,6 +250,7 @@ PYBIND11_MODULE(simple_ml_ext, m) {
     },
     py::arg("X"), py::arg("y"), py::arg("theta"),
     py::arg("lr"), py::arg("batch"));
+    // these are the argument names of the function
 }
 #endif
 

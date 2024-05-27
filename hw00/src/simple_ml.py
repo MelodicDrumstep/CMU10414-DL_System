@@ -113,14 +113,20 @@ def softmax_regression_epoch(X, y, theta, lr = 0.1, batch=100):
     """
     ### BEGIN YOUR CODE
     for i in range(0, (y.size + batch - 1) // batch):
-        x = X[i * batch : (i + 1) * batch]
+        x_batch = X[i * batch : (i + 1) * batch]
         y_batch = y[i * batch : (i + 1) * batch]
-        Z = np.exp(x @ theta)
+        # take the x and y of this pariticular batch
+        Z = np.exp(x_batch @ theta)
+        # @ is for matrix multiplication
         Z = Z / np.sum(Z, axis = 1, keepdims = True)
-        I = np.zeros((batch, y.max() + 1))
-        I[np.arange(batch), y_batch] = 1
-        gradient = (x.T @ (Z - I)) / batch
+        # normalization
+        I_y = np.zeros((batch, y.max() + 1))
+        I_y[np.arange(batch), y_batch] = 1
+        # create I_y
+        gradient = (x_batch.T @ (Z - I_y)) / batch
+        # calculate the gradient according to the formula
         theta -= lr * gradient
+        # renew the paramater theta
     ### END YOUR CODE
 
 
@@ -148,22 +154,29 @@ def nn_epoch(X, y, W1, W2, lr = 0.1, batch=100):
     """
     ### BEGIN YOUR CODE
     for i in range(0, (y.size + batch - 1) // batch):
-        x = X[i * batch : (i + 1) * batch]
+        x_batch = X[i * batch : (i + 1) * batch]
         y_batch = y[i * batch : (i + 1) * batch]
-        z1 = x @ W1
-        z1[z1 < 0] = 0
-        G2 = np.exp(z1 @ W2)
+        Z1 = x_batch @ W1
+        Z1[Z1 < 0] = 0
+        # Z1 = ReLU(XW_1)
+        G2 = np.exp(Z1 @ W2)
         G2 = G2 / np.sum(G2, axis = 1, keepdims = True)
-        Y = np.zeros((batch, y.max() + 1))
-        Y[np.arange(batch), y_batch] = 1
-        G2 -= Y
-        G1 = np.zeros_like(z1)
-        G1[z1 > 0] = 1
+        I_y = np.zeros((batch, y.max() + 1))
+        I_y[np.arange(batch), y_batch] = 1
+        # create I_y
+        G2 -= I_y
+        # G_2 = normalize(exp(Z_1W_2)) - I_y
+        G1 = np.zeros_like(Z1)
+        G1[Z1 > 0] = 1
         G1 = G1 * (G2 @ W2.T)
-        grad1 = x.T @ G1 / batch
-        grad2 = z1.T @ G2 / batch
+        # G_1 = 1[Z_1 > 0] (G_2W_2^T)
+        grad1 = x_batch.T @ G1 / batch
+        # grad1 = X^T G_1 / batch
+        grad2 = Z1.T @ G2 / batch
+        # grad2 = Z_1^T G_2 / batch
         W1 -= lr * grad1
         W2 -= lr * grad2
+        # renew the parameters W_1 and W_2
     ### END YOUR CODE
 
 
@@ -184,6 +197,7 @@ def train_softmax(X_tr, y_tr, X_te, y_te, epochs=10, lr=0.5, batch=100,
         if not cpp:
             softmax_regression_epoch(X_tr, y_tr, theta, lr=lr, batch=batch)
         else:
+            # if the cpp version is available, use the cpp version
             softmax_regression_epoch_cpp(X_tr, y_tr, theta, lr=lr, batch=batch)
         train_loss, train_err = loss_err(X_tr @ theta, y_tr)
         test_loss, test_err = loss_err(X_te @ theta, y_te)
