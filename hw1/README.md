@@ -258,7 +258,9 @@ class Tensor(Value):
     # ....
 ```
 
-Tensor 是计算图中结点的类型。 我们还需要定义运算的类型， 接下来看 `Op` 类。
+Tensor 是计算图中结点的类型。 
+
+我们还需要定义运算的类型， 接下来看 `Op` 类。
 
 ## Op
 
@@ -355,15 +357,6 @@ class EWiseDiv(TensorOp):
         # d(x / y) / dy = -x / y^2
         return out_grad / node.inputs[1], -out_grad * node.inputs[0] / (node.inputs[1] ** 2)
 
-class ReLU(TensorOp):
-    def compute(self, a):
-        return array_api.maximum(0, a)
-
-    def gradient(self, out_grad, node):
-        data = node.realize_cached_data().copy()
-        data[data > 0] = 1
-        return out_grad * Tensor(data)
-
 class MatMul(TensorOp):
     def compute(self, a, b):
         return array_api.matmul(a, b)
@@ -377,9 +370,145 @@ class MatMul(TensorOp):
         if len(rhs.shape) < len(rgrad.shape):
             rgrad = rgrad.sum(tuple([i for i in range(len(rgrad.shape) - len(rhs.shape))]))
         return lgrad, rgrad
+
+class Summation(TensorOp):
+    def __init__(self, axes: Optional[tuple] = None):
+        self.axes = axes
+
+    def compute(self, a):
+        return array_api.sum(a, axis = self.axes)
+
+    def gradient(self, out_grad, node):
+        new_shape = list(node.inputs[0].shape)
+        axes = range(len(new_shape)) if self.axes is None else self.axes
+        for axis in axes:
+            new_shape[axis] = 1
+        return out_grad.reshape(new_shape).broadcast_to(node.inputs[0].shape)
+
+class BroadcastTo(TensorOp):
+    def __init__(self, shape):
+        self.shape = shape
+
+    def compute(self, a):
+        return array_api.broadcast_to(a, self.shape)
+
+    def gradient(self, out_grad, node):
+        original_shape = node.inputs[0].shape
+        shrink_dims = [i for i in range(len(self.shape))]
+        for i, (ori, cur) in enumerate(zip(reversed(original_shape), reversed(self.shape))):
+            if ori == cur:
+                shrink_dims[len(self.shape) - i - 1] = -1
+        shrink_dims = tuple(filter(lambda x: x >= 0, shrink_dims))
+        return out_grad.sum(shrink_dims).reshape(original_shape)
+
+class Reshape(TensorOp):
+    def __init__(self, shape):
+        self.shape = shape
+
+    def compute(self, a):
+        return array_api.reshape(a, self.shape)
+
+    def gradient(self, out_grad, node):
+        return out_grad.reshape(node.inputs[0].shape)
 ```
 
 我们自定义了 `compute` 函数， 用于正向计算， 和 `gradient` 函数， 计算梯度， 用于反向传播。 
+
+## 前向计算 & 反向传播
+
+这里我们需要明确几点:
+
++ 何时前向计算？
+
+我们并不是每创建一个结点就自动通过运算类计算出值的， 而是第一次手动调用 `realize_cached_data` 的时候计算出值， 并将该值缓存， 下次需要时直接从缓存中取即可。
+
+```python
+    def realize_cached_data(self):
+        """Run compute to realize the cached data"""
+        # avoid recomputation
+        if self.cached_data is not None:
+            return self.cached_data
+        
+        # note: data implicitly calls realized cached data
+        self.cached_data = self.op.compute(
+            *[x.realize_cached_data() for x in self.inputs]
+        )
+        return self.cached_data
+```
+
+注意到这里会递归调用 `realize_cached_data`， 所以如果刚构建好一个计算图， 第一次调用最终结点的 `realize_cached_data` 时， 就会调用整张图每个结点的 `op.compute` 计算出每个结点的值。
+
+其实如果只是完成一次 `regression epoch`， 我们没必要用到 `loss` 的值，如
+
+```python
+    for i in range(0, (y.size + batch - 1) // batch):
+        x_batch = ndl.Tensor(X[i * batch : (i+1) * batch, :])
+        y_batch = y[i * batch : (i+1) * batch]
+        Z = ndl.relu(x_batch.matmul(W1)).matmul(W2)
+        # Z = ReLU(X * W1) * W2
+        I_y = np.zeros((batch, y.max() + 1))
+        I_y[np.arange(batch), y_batch] = 1
+        I_y = ndl.Tensor(I_y)
+        # create I_y as numpy array and convert it to Tensor
+        loss = softmax_loss(Z, I_y)
+        # Create a loss node by applying softmax_loss function to Z and I_y
+        loss.backward()
+        # back propagate the gradients
+        W1 = ndl.Tensor(W1.realize_cached_data() - lr * W1.grad.realize_cached_data())
+        W2 = ndl.Tensor(W2.realize_cached_data() - lr * W2.grad.realize_cached_data())
+        # update the weights
+    return W1, W2
+```
+
+这里我们需要计算出值的地方只有 ReLU 结点及之前。 (ReLU 的梯度需要结点值来计算)
+
+但我们训练时通常也需要 `loss` 的值来判断收敛以及输出调试， 因此我们往往需要计算出 `loss` 的值, 如:
+
+``` python
+def loss_err(h, y):
+    """Helper function to compute both loss and error"""
+    I_y = np.zeros((y.shape[0], h.shape[-1]))
+    I_y[np.arange(y.size), y] = 1
+    y_ = ndl.Tensor(I_y)
+    return softmax_loss(h, y_).numpy(), np.mean(h.numpy().argmax(axis=1) != y)
+```
+
+这里的 `.numpy()` 函数会调用 `realize_cached_data` 并返回 `numpy` 数组。
+
++ 何时反向传播？
+
+首先我们需要注意， 我们把 `grid` 定义为 `Tensor` 的成员， 它也是一个 `Tensor`.
+
+```python
+class Tensor(Value):
+    # Notice that grad is a tensor!!!
+    grad: "Tensor"
+```
+
+我们在反向传播时 `backward` 的参数也是一个 `Tensor`:
+
+```python
+# Attention!! This is the core function
+# backward will compute the gradient by topo order
+# see "compute_gradient_of_variables" for implementation
+def backward(self, out_grad = None):
+    out_grad = (
+        out_grad
+        if out_grad
+        else init.ones(*self.shape, dtype=self.dtype, device=self.device)
+    )
+    compute_gradient_of_variables(self, out_grad)
+
+def ones(*shape, device=None, dtype="float32", requires_grad=False):
+    """Generate all-ones Tensor"""
+    return constant(
+        *shape, c=1.0, device=device, dtype=dtype, requires_grad=requires_grad
+    )
+```
+
+这里我们最终结点的 `out_grad` 是全 1 的 `Tensor`， 即表示 $\frac{\partial y}{\partial y} = 1$.
+
+下面我详细讲解一下这里的反向传播算法。
 
 ## back propogation
 
@@ -436,3 +565,24 @@ def topo_sort_dfs(node, visited, topo_order):
         topo_sort_dfs(input_node, visited, topo_order)
     topo_order.append(node)
 ```
+
+
+## 不显然的 gradient 函数
+
+
+这里详细解释一下几个不显然的梯度是如何算的:
+
+### ReLU
+
+```python
+class ReLU(TensorOp):
+    def compute(self, a):
+        return array_api.maximum(0, a)
+
+    def gradient(self, out_grad, node):
+        data = node.realize_cached_data().copy()
+        data[data > 0] = 1
+        return out_grad * Tensor(data)
+```
+
+这里直接取出 tensor node 存的数据(即 ReLU(...) 这个前向计算的时候算过的值)， 然后复制一份， 再把数据 > 0 的部分设置为 1， (<= 0的部分已经是0了)
