@@ -58,7 +58,7 @@ def parse_mnist(image_filename, label_filename):
     return images, labels
     ### END YOUR CODE
 
-def softmax_loss(Z, y_one_hot):
+def softmax_loss(Z, I_y):
     """Return softmax loss.  Note that for the purposes of this assignment,
     you don't need to worry about "nicely" scaling the numerical properties
     of the log-sum-exp computation, but can just compute this directly.
@@ -75,7 +75,7 @@ def softmax_loss(Z, y_one_hot):
         Average softmax loss over the sample. (ndl.Tensor[np.float32])
     """
     ### BEGIN YOUR SOLUTION
-    return (ndl.log(ndl.exp(Z).sum((1,))).sum() - (y_one_hot * Z).sum()) / Z.shape[0]
+    return (ndl.log(ndl.exp(Z).sum((1,))).sum() - (I_y * Z).sum()) / Z.shape[0]
     ### END YOUR SOLUTION
 
 
@@ -105,16 +105,21 @@ def nn_epoch(X, y, W1, W2, lr=0.1, batch=100):
 
     ### BEGIN YOUR SOLUTION
     for i in range(0, (y.size + batch - 1) // batch):
-        x = ndl.Tensor(X[i * batch : (i+1) * batch, :])
-        Z = ndl.relu(x.matmul(W1)).matmul(W2)
+        x_batch = ndl.Tensor(X[i * batch : (i+1) * batch, :])
         y_batch = y[i * batch : (i+1) * batch]
-        y_one_hot = np.zeros((batch, y.max() + 1))
-        y_one_hot[np.arange(batch), y_batch] = 1
-        y_one_hot = ndl.Tensor(y_one_hot)
-        loss = softmax_loss(Z, y_one_hot)
+        Z = ndl.relu(x_batch.matmul(W1)).matmul(W2)
+        # Z = ReLU(X * W1) * W2
+        I_y = np.zeros((batch, y.max() + 1))
+        I_y[np.arange(batch), y_batch] = 1
+        I_y = ndl.Tensor(I_y)
+        # create I_y as numpy array and convert it to Tensor
+        loss = softmax_loss(Z, I_y)
+        # Create a loss node by applying softmax_loss function to Z and I_y
         loss.backward()
+        # back propagate the gradients
         W1 = ndl.Tensor(W1.realize_cached_data() - lr * W1.grad.realize_cached_data())
         W2 = ndl.Tensor(W2.realize_cached_data() - lr * W2.grad.realize_cached_data())
+        # update the weights
     return W1, W2
     ### END YOUR SOLUTION
 
@@ -124,7 +129,7 @@ def nn_epoch(X, y, W1, W2, lr=0.1, batch=100):
 
 def loss_err(h, y):
     """Helper function to compute both loss and error"""
-    y_one_hot = np.zeros((y.shape[0], h.shape[-1]))
-    y_one_hot[np.arange(y.size), y] = 1
-    y_ = ndl.Tensor(y_one_hot)
+    I_y = np.zeros((y.shape[0], h.shape[-1]))
+    I_y[np.arange(y.size), y] = 1
+    y_ = ndl.Tensor(I_y)
     return softmax_loss(h, y_).numpy(), np.mean(h.numpy().argmax(axis=1) != y)

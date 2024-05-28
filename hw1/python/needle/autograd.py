@@ -91,7 +91,10 @@ class Value:
 
     # trace of computational graph
     op: Optional[Op]
+    # the operation with this value node
     inputs: List["Value"]
+    # the inputs with this value node
+
     # The following fields are cached fields for
     # dynamic computation
     cached_data: NDArray
@@ -102,6 +105,7 @@ class Value:
         # avoid recomputation
         if self.cached_data is not None:
             return self.cached_data
+        
         # note: data implicitly calls realized cached data
         self.cached_data = self.op.compute(
             *[x.realize_cached_data() for x in self.inputs]
@@ -109,9 +113,12 @@ class Value:
         return self.cached_data
 
     def is_leaf(self):
+        # if there's no operation with this value node
+        # then it's the leaf node
         return self.op is None
 
     def __del__(self):
+        # decrement the global counter  
         global TENSOR_COUNTER
         TENSOR_COUNTER -= 1
 
@@ -124,9 +131,13 @@ class Value:
         cached_data: List[object] = None,
         requires_grad: Optional[bool] = None
     ):
+        # increment the global counter
         global TENSOR_COUNTER
         TENSOR_COUNTER += 1
         if requires_grad is None:
+            # if this node does not require gradient
+            # check if there's any input node that requires gradient
+            # if so, I should mark this node as "requires_grad"
             requires_grad = any(x.requires_grad for x in inputs)
         self.op = op
         self.inputs = inputs
@@ -134,6 +145,14 @@ class Value:
         self.cached_data = cached_data
         self.requires_grad = requires_grad
 
+    # classmethod is like statis member function in C++
+    # it's bind to the whole class rather than some class objects
+    # This method will create a constant value node
+    # cls means the class itself
+    # Why it's constant? Because this value node has no operation
+    # and no input
+    # How to use it? like this :
+    # const_value = Value.make_const(data)
     @classmethod
     def make_const(cls, data, *, requires_grad=False):
         value = cls.__new__(cls)
@@ -145,12 +164,17 @@ class Value:
         )
         return value
 
+
+    # this class method will create a value node 
+    # with a certain operation and inputs
     @classmethod
     def make_from_op(cls, op: Op, inputs: List["Value"]):
         value = cls.__new__(cls)
         value._init(op, inputs)
 
         if not LAZY_MODE:
+            # if it's not in the lazy mode
+            # compute the data if needed
             if not value.requires_grad:
                 return value.detach()
             value.realize_cached_data()
@@ -191,6 +215,7 @@ class TensorTuple(Value):
 
 
 class Tensor(Value):
+    # Notice that grad is a tensor!!!
     grad: "Tensor"
 
     def __init__(
@@ -201,8 +226,11 @@ class Tensor(Value):
         dtype=None,
         requires_grad=True,
         **kwargs
+        # kwargs means other parameters that are not defined
     ):
         if isinstance(array, Tensor):
+            # if array is already a tensor
+            # just copy the data
             if device is None:
                 device = array.device
             if dtype is None:
@@ -215,9 +243,12 @@ class Tensor(Value):
                     array.numpy(), device=device, dtype=dtype
                 )
         else:
+            # if array is not a tensor
+            # convert it to a tensor
             device = device if device else cpu()
             cached_data = Tensor._array_from_numpy(array, device=device, dtype=dtype)
-
+        # call the _init function defined in the base class
+        # Value to initialize the node
         self._init(
             None,
             [],
@@ -225,12 +256,20 @@ class Tensor(Value):
             requires_grad=requires_grad,
         )
 
+    # static method is like static member function in C++
+    # (It's more like static member function than "class method")
+    # because it cannot access the class at all
+
+    # this method will convert an array into a "array_api" array
+    # to unified the data
     @staticmethod
     def _array_from_numpy(numpy_array, device, dtype):
         if array_api is numpy:
             return numpy.array(numpy_array, dtype=dtype)
         return array_api.array(numpy_array, device=device, dtype=dtype)
 
+    # this method will create a Tensor node out of a certain operation
+    # and inputs
     @staticmethod
     def make_from_op(op: Op, inputs: List["Value"]):
         tensor = Tensor.__new__(Tensor)
@@ -241,6 +280,7 @@ class Tensor(Value):
             tensor.realize_cached_data()
         return tensor
 
+    # This method will create a const tensor node
     @staticmethod
     def make_const(data, requires_grad=False):
         tensor = Tensor.__new__(Tensor)
@@ -254,10 +294,13 @@ class Tensor(Value):
         )
         return tensor
 
+    # below defines a data member of the class
+    # on our own
     @property
     def data(self):
         return self.detach()
 
+    # @data.setter defines how we can set the property
     @data.setter
     def data(self, value):
         assert isinstance(value, Tensor)
@@ -287,7 +330,10 @@ class Tensor(Value):
             return cpu()
         return data.device
 
-    def backward(self, out_grad=None):
+    # Attention!! This is the core function
+    # backward will compute the gradient by topo order
+    # see "compute_gradient_of_variables" for implementation
+    def backward(self, out_grad = None):
         out_grad = (
             out_grad
             if out_grad
@@ -385,15 +431,17 @@ def compute_gradient_of_variables(output_tensor, out_grad):
         grad = sum_node_list(node_to_output_grads_list[node])
         # fill in the fields of the node
         node.grad = grad
+        # store the computed gradient in the "grad" field of this Tensor Node
         if node.op is None:
             continue
         # compute the gradients of the inputs
         input_grads = node.op.gradient_as_tuple(grad, node)
+        # Notice to use grad as parameter
         for i, input_node in enumerate(node.inputs):
+            # enumerate all input nodes and add the grad to the list
             if input_node not in node_to_output_grads_list:
                 node_to_output_grads_list[input_node] = []
             node_to_output_grads_list[input_node].append(input_grads[i])
-
     ### END YOUR SOLUTION
 
 

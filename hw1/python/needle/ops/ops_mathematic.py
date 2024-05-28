@@ -169,7 +169,8 @@ class Transpose(TensorOp):
 
     def gradient(self, out_grad, node):
         ### BEGIN YOUR SOLUTION
-        out_grad.transpose(self.axes)
+        # \frac{\partial L}{\partial A} = (\frac{\partial L}{\partial A^T})^T
+        return out_grad.transpose(self.axes)
         ### END YOUR SOLUTION
 
 
@@ -188,6 +189,7 @@ class Reshape(TensorOp):
 
     def gradient(self, out_grad, node):
         ### BEGIN YOUR SOLUTION
+        # just reshape back to the original shape
         return out_grad.reshape(node.inputs[0].shape)
         ### END YOUR SOLUTION
 
@@ -209,11 +211,15 @@ class BroadcastTo(TensorOp):
         ### BEGIN YOUR SOLUTION
         original_shape = node.inputs[0].shape
         shrink_dims = [i for i in range(len(self.shape))]
+        # get the original shape and initialize an array 
+        # to represent all the dims to be shrinked
         for i, (ori, cur) in enumerate(zip(reversed(original_shape), reversed(self.shape))):
             if ori == cur:
                 shrink_dims[len(self.shape) - i - 1] = -1
+                # if the dimension is the same as an original one, then we should not shrink it
         shrink_dims = tuple(filter(lambda x: x >= 0, shrink_dims))
         return out_grad.sum(shrink_dims).reshape(original_shape)
+        # firstly we sum the dims that are shrinked, then reshape it back to the original shape
         ### END YOUR SOLUTION
 
 
@@ -252,9 +258,13 @@ class MatMul(TensorOp):
 
     def gradient(self, out_grad, node):
         ### BEGIN YOUR SOLUTION
+        # \partial L / \partial B = A^T * \partial L / \partial C
         # \partial L / \partial A = \partial L / \partial C * B^T
         lhs, rhs = node.inputs
         lgrad, rgrad = matmul(out_grad, rhs.transpose()), matmul(lhs.transpose(), out_grad)
+
+        # This is for matmul like (6, 6, 5, 4) x (4, 3)
+        # I should adjust the dimension after computing the gradient
         if len(lhs.shape) < len(lgrad.shape):
             lgrad = lgrad.sum(tuple([i for i in range(len(lgrad.shape) - len(lhs.shape))]))
         if len(rhs.shape) < len(rgrad.shape):

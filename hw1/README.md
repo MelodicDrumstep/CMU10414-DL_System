@@ -356,60 +356,6 @@ class EWiseDiv(TensorOp):
         # d(x / y) / dx = 1 / y
         # d(x / y) / dy = -x / y^2
         return out_grad / node.inputs[1], -out_grad * node.inputs[0] / (node.inputs[1] ** 2)
-
-class MatMul(TensorOp):
-    def compute(self, a, b):
-        return array_api.matmul(a, b)
-
-    def gradient(self, out_grad, node):
-        # \partial L / \partial A = \partial L / \partial C * B^T
-        lhs, rhs = node.inputs
-        lgrad, rgrad = matmul(out_grad, rhs.transpose()), matmul(lhs.transpose(), out_grad)
-        if len(lhs.shape) < len(lgrad.shape):
-            lgrad = lgrad.sum(tuple([i for i in range(len(lgrad.shape) - len(lhs.shape))]))
-        if len(rhs.shape) < len(rgrad.shape):
-            rgrad = rgrad.sum(tuple([i for i in range(len(rgrad.shape) - len(rhs.shape))]))
-        return lgrad, rgrad
-
-class Summation(TensorOp):
-    def __init__(self, axes: Optional[tuple] = None):
-        self.axes = axes
-
-    def compute(self, a):
-        return array_api.sum(a, axis = self.axes)
-
-    def gradient(self, out_grad, node):
-        new_shape = list(node.inputs[0].shape)
-        axes = range(len(new_shape)) if self.axes is None else self.axes
-        for axis in axes:
-            new_shape[axis] = 1
-        return out_grad.reshape(new_shape).broadcast_to(node.inputs[0].shape)
-
-class BroadcastTo(TensorOp):
-    def __init__(self, shape):
-        self.shape = shape
-
-    def compute(self, a):
-        return array_api.broadcast_to(a, self.shape)
-
-    def gradient(self, out_grad, node):
-        original_shape = node.inputs[0].shape
-        shrink_dims = [i for i in range(len(self.shape))]
-        for i, (ori, cur) in enumerate(zip(reversed(original_shape), reversed(self.shape))):
-            if ori == cur:
-                shrink_dims[len(self.shape) - i - 1] = -1
-        shrink_dims = tuple(filter(lambda x: x >= 0, shrink_dims))
-        return out_grad.sum(shrink_dims).reshape(original_shape)
-
-class Reshape(TensorOp):
-    def __init__(self, shape):
-        self.shape = shape
-
-    def compute(self, a):
-        return array_api.reshape(a, self.shape)
-
-    def gradient(self, out_grad, node):
-        return out_grad.reshape(node.inputs[0].shape)
 ```
 
 我们自定义了 `compute` 函数， 用于正向计算， 和 `gradient` 函数， 计算梯度， 用于反向传播。 
@@ -566,6 +512,11 @@ def topo_sort_dfs(node, visited, topo_order):
     topo_order.append(node)
 ```
 
+这里我们创建了一个 `map` : `node_to_output_grads_list`, 每次我们算到一个结点的偏导数， 就会把这个偏导数 `append` 到结点对应位置的 `list` 上。 轮到这个结点时， 只需要把它对应的 `list` 中的所有偏导数求和， 即为该节点的梯度， 然后将该 `gradient tensor` 存入结点的 `grad` 区域。
+
+这里一定要理解 `gradient` 函数做了什么： 我们假设最终函数为 `L`, 该结点为 `y`, 该结点的输入为 `a, b ,c` 3 个 `Tensor`， 则 `gradient` 函数会输出一个 `list : ` $[\frac{\partial L}{\partial y}\frac{\partial y}{\partial a}, \frac{\partial L}{\partial y}\frac{\partial y}{\partial b}, \frac{\partial L}{\partial y}\frac{\partial y}{\partial c}]$.
+
+所以我们如何定义每个 `Op` 的 `gradient` 函数？ 我们只需要知道用什么表达式计算 $\frac{\partial y}{\partial a}$ 就行了。
 
 ## 不显然的 gradient 函数
 
@@ -585,4 +536,244 @@ class ReLU(TensorOp):
         return out_grad * Tensor(data)
 ```
 
-这里直接取出 tensor node 存的数据(即 ReLU(...) 这个前向计算的时候算过的值)， 然后复制一份， 再把数据 > 0 的部分设置为 1， (<= 0的部分已经是0了)
+这里直接取出 tensor node 存的数据(即 ReLU(...) 这个前向计算的时候算过的值)， 然后复制一份， 再把数据 $> 0$ 的部分设置为 $1$， ( $<= 0$ 的部分已经是 $0$ 了) 
+
+### MatMul
+
+首先看这部分讲解:
+
+<img src="https://notes.sjtu.edu.cn/uploads/upload_19798b5f2d4122136aa020c0176105ac.png" width="400">
+<img src="https://notes.sjtu.edu.cn/uploads/upload_5075b8f7dd0cd1421cdb594358ed2ae9.png" width="400">
+<img src="https://notes.sjtu.edu.cn/uploads/upload_fcd5df3c3d2419db425c00cf47590656.png" width="400">
+<img src="https://notes.sjtu.edu.cn/uploads/upload_ecc36d76780e29089df87892189995e9.png" width="400">
+<img src="https://notes.sjtu.edu.cn/uploads/upload_d80e4b5528f6d6848481f0f1643ed019.png" width="400">
+<img src="https://notes.sjtu.edu.cn/uploads/upload_16042b111e509192c833e9b2a94bc0c8.png" width="400">
+<img src="https://notes.sjtu.edu.cn/uploads/upload_3c5f2b4ec8e4ea932524d68b3d27f21f.png" width="400">
+
+矩阵乘法的规则是 :  若 $C = AB$, 则 $\frac{\partial L}{\partial A} = \frac{\partial L}{\partial C}B^T$, $\frac{\partial L}{\partial B} = A^T\frac{\partial L}{\partial C}$.
+
+按理说这里的 shape 是对应上的， 但是为了处理高维情况 (比如三维 Tensor 和二维 Tensor 相乘)， 这里进行了维度调整。
+
+```python
+# C = A x B
+class MatMul(TensorOp):
+    def compute(self, a, b):
+        return array_api.matmul(a, b)
+
+    def gradient(self, out_grad, node):
+        # \partial L / \partial B = A^T * \partial L / \partial C
+        # \partial L / \partial A = \partial L / \partial C * B^T
+        lhs, rhs = node.inputs
+        lgrad, rgrad = matmul(out_grad, rhs.transpose()), matmul(lhs.transpose(), out_grad)
+        if len(lhs.shape) < len(lgrad.shape):
+            lgrad = lgrad.sum(tuple([i for i in range(len(lgrad.shape) - len(lhs.shape))]))
+        if len(rhs.shape) < len(rgrad.shape):
+            rgrad = rgrad.sum(tuple([i for i in range(len(rgrad.shape) - len(rhs.shape))]))
+        return lgrad, rgrad
+```
+
+我们可以看不进行维度调整会出现什么问题。 比如， 对于样例
+
+```python
+    gradient_check(
+        ndl.matmul,
+        ndl.Tensor(np.random.randn(6, 6, 5, 4)),
+        ndl.Tensor(np.random.randn(4, 3)),
+    )
+```
+
+这里 $A : 6 x 6 x 5 x 4$, $B : 4 x 3$, 则 $C : 6 x 6 x 5 x 3$.
+
+因此我们假设 $outgrad : 6 x 6 x 5 x 3$.
+
+那么 $lgrad = outgrad B^T : 6 x 6 x 5 x 4$. 和 $A$ 的形状匹配， 不需要调整了。
+
+$rgrad = A^T outgrad : 6 x 6 x 4 x 3$. 和 $B$ 的形状不匹配。 如果放任不管， 那和 $B$ 算出来的其他梯度是无法相加的。 因此， 我们需要把它调整为 $4 x 3$.
+
+如何调整？ 我们知道， `sum` 可以按照某一维度求和， 即把某一维度"压扁"。 那么， 我可以这样压扁前两个维度:
+
+```python
+    rgrad = rgrad.sum(tuple([i for i in range(2)]))
+```
+
+如果泛化，则是这样:
+
+```python
+rgrad = rgrad.sum(tuple([i for i in range(len(rgrad.shape) - len(rhs.shape))]))
+```
+
+即我们用 `sum` 把多出来的维度压扁。保证形状的统一性。
+
+### Transpose
+
+```python
+class Transpose(TensorOp):
+    def __init__(self, axes: Optional[tuple] = None):
+        self.axes = axes
+
+    def compute(self, a):
+        # Notice here:
+        # if the self.axies is None, then swap the last two dimensions
+        # otherwise, swap the dimensions according to the self.axes
+        if self.axes:
+            return array_api.swapaxes(a, self.axes[0], self.axes[1])
+        else:
+            return array_api.swapaxes(a, a.ndim - 2, a.ndim - 1)
+
+    def gradient(self, out_grad, node):
+        return out_grad.transpose(self.axes)
+```
+
+对于矩阵转置， 首先注意， 我们前向计算的时候只交换最后两个维度。 如 $A : 6 x 6 x 5 x 4$, 则 $A^T : 6 x 6 x 4 x 5$.
+
+另外根据规则
+
+$\frac{\partial L}{\partial A} = (\frac{\partial L}{\partial A^T})^T$
+
+梯度计算就是直接对 `outgrad` 求转置即可。
+
+### Reshape
+
+```python
+class Reshape(TensorOp):
+    def __init__(self, shape):
+        self.shape = shape
+
+    def compute(self, a):
+        return array_api.reshape(a, self.shape)
+
+    def gradient(self, out_grad, node):
+        return out_grad.reshape(node.inputs[0].shape)
+```
+
+根据规则， $\frac{\partial L}{\partial A} = \frac{\partial L}{\partial A.reshape(shape)}.reshape(A.shape)$.
+
+我反向传播的时候只需要把 `outgrad` 的形状重塑回 `A` 的形状就行了。
+
+### broadcasting
+
+```python
+class BroadcastTo(TensorOp):
+    def __init__(self, shape):
+        self.shape = shape
+
+    def compute(self, a):
+        return array_api.broadcast_to(a, self.shape)
+
+    def gradient(self, out_grad, node):
+        original_shape = node.inputs[0].shape
+        shrink_dims = [i for i in range(len(self.shape))]
+        # get the original shape and initialize an array 
+        # to represent all the dims to be shrinked
+        for i, (ori, cur) in enumerate(zip(reversed(original_shape), reversed(self.shape))):
+            if ori == cur:
+                shrink_dims[len(self.shape) - i - 1] = -1
+                # if the dimension is the same as an original one, then we should not shrink it
+        shrink_dims = tuple(filter(lambda x: x >= 0, shrink_dims))
+        return out_grad.sum(shrink_dims).reshape(original_shape)
+        # firstly we sum the dims that are shrinked, then reshape it back to the original shape
+```
+
+`broadcast_to` 本身可以广播一个向量， 比如：
+
+```
+A:
+[[1]
+ [2]
+ [3]]
+A_broadcasted (A broadcasted to (3, 4)):
+[[1 1 1 1]
+ [2 2 2 2]
+ [3 3 3 3]]
+```
+
+我们反向传播的时候， 需要做维度压缩。 我们首先创建一个数组， 然后确定哪些维度要压缩。 
+
+```python
+for i, (ori, cur) in enumerate(zip(reversed(original_shape), reversed(self.shape))):
+    if ori == cur:
+        shrink_dims[len(self.shape) - i - 1] = -1
+shrink_dims = tuple(filter(lambda x: x >= 0, shrink_dims))
+```
+
+这一段代码会把不需要压缩的维度标记为 -1。 之后， 我们过滤掉不需要压缩的维度。
+
+也就是， 经过上述变换后， 我们的广播后的 $A$ 对应数组为 $[-1, 1]$.
+
+需要压缩的为第 1 个维度 (0-indexed).
+
+然后我们用 `sum` 对 `outgrad` 进行压缩。 
+
+假设 
+
+```
+outgrad
+[[1 1 1 1]
+ [1 1 1 1]
+ [1 1 1 1]]
+```
+
+压缩后即为 
+
+```
+outgrad after sum
+[[4]
+ [4]
+ [4]]
+```
+
+然后再 `reshape` 到原先的形状。 即为
+
+```
+outgrad after sum after reshape
+[[4]
+ [4]
+ [4]]
+```
+
+### Summation
+
+```python
+class Summation(TensorOp):
+    def __init__(self, axes: Optional[tuple] = None):
+        self.axes = axes
+
+    def compute(self, a):
+        return array_api.sum(a, axis = self.axes)
+
+    def gradient(self, out_grad, node):
+        new_shape = list(node.inputs[0].shape)
+        axes = range(len(new_shape)) if self.axes is None else self.axes
+        for axis in axes:
+            new_shape[axis] = 1
+        return out_grad.reshape(new_shape).broadcast_to(node.inputs[0].shape)
+```
+
+对于 `summation`， 反向传播需要先 `shape` 再 `broadcast`.
+
+我们可以看个例子：
+
+不妨假设
+
+```
+A.shape: (3, 4, 5)
+A_summed = array_api.sum(A, axes=(1, ))
+A_summed.shape: (3, 5)
+```
+
+则 outgrad 形状与 `A_summed` 相同， 为 `(3, 5)`.
+
+反向传播时， 我们先确定 `sum` 的轴为第一个轴， 然后我们 `reshape` :
+
+```
+outgrad: (3, 5)
+outgrad after reshape: (3, 1, 5)
+```
+
+之后我们广播回原来的形状：
+
+```
+outgrad: (3, 5)
+outgrad after reshape after broadcasting: (3, 4, 5)
+```
+

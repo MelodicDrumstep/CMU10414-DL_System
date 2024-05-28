@@ -1060,6 +1060,7 @@ if __name__ == "__main__":
     test_matmul_batched_backward()
     test_reshape_backward()
     test_negate_backward()
-    #test_transpose_backward()
+    test_transpose_backward()
     test_broadcast_to_backward()
     test_summation_backward()
+    print("Congrats! All tests pass!!")
