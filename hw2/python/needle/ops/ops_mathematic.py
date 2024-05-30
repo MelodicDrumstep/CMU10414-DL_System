@@ -169,7 +169,7 @@ class Transpose(TensorOp):
 
     def gradient(self, out_grad, node):
         ### BEGIN YOUR SOLUTION
-        out_grad.transpose(self.axes)
+        return out_grad.transpose(self.axes)
         ### END YOUR SOLUTION
 
 
