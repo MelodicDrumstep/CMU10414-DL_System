@@ -582,13 +582,13 @@ class MatMul(TensorOp):
     )
 ```
 
-这里 $A : 6 x 6 x 5 x 4$, $B : 4 x 3$, 则 $C : 6 x 6 x 5 x 3$.
+这里 $A : 6 \times 6 \times 5 \times 4$, $B : 4 \times 3$, 则 $C : 6 \times 6 \times 5 \times 3$.
 
-因此我们假设 $outgrad : 6 x 6 x 5 x 3$.
+因此我们假设 $outgrad : 6 \times 6 \times 5 \times 3$.
 
-那么 $lgrad = outgrad B^T : 6 x 6 x 5 x 4$. 和 $A$ 的形状匹配， 不需要调整了。
+那么 $lgrad = outgrad B^T : 6 \times 6 \times 5 \times 4$. 和 $A$ 的形状匹配， 不需要调整了。
 
-$rgrad = A^T outgrad : 6 x 6 x 4 x 3$. 和 $B$ 的形状不匹配。 如果放任不管， 那和 $B$ 算出来的其他梯度是无法相加的。 因此， 我们需要把它调整为 $4 x 3$.
+$rgrad = A^T outgrad : 6 \times 6 \times 4 \times 3$. 和 $B$ 的形状不匹配。 如果放任不管， 那和 $B$ 算出来的其他梯度是无法相加的。 因此， 我们需要把它调整为 $4 \times 3$.
 
 如何调整？ 我们知道， `sum` 可以按照某一维度求和， 即把某一维度"压扁"。 那么， 我可以这样压扁前两个维度:
 
@@ -624,7 +624,7 @@ class Transpose(TensorOp):
         return out_grad.transpose(self.axes)
 ```
 
-对于矩阵转置， 首先注意， 我们前向计算的时候只交换最后两个维度。 如 $A : 6 x 6 x 5 x 4$, 则 $A^T : 6 x 6 x 4 x 5$.
+对于矩阵转置， 首先注意， 我们前向计算的时候只交换最后两个维度。 如 $A : 6 \times 6 \times 5 \times 4$, 则 $A^T : 6 \times 6 \times 4 \times 5$.
 
 另外根据规则
 
