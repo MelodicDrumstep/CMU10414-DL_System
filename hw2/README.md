@@ -1,6 +1,6 @@
 # 前情提要
 
-我们已经在 `hw1` 中实现了一个基础的机器学习框架。 我们来看一些潜在的问题:
+我们已经在 `hw1` 中实现了一个基础的深度学习框架。 我们来看一些潜在的问题:
 
 ## memory bug?
 
@@ -92,24 +92,71 @@ def softmax_stable(x):
 softmax_stable(x)
 ```
 
+## 质疑 pytorch， 理解 pytorch, 成为 pytorch
+
+我们在 hw1 里写的深度学习框架有什么问题？ 问题在于， 模块化做得还不够好。 神经网络从研究者的角度来看是分层、模块化的。 我们希望解耦各个模块， 从而使得研究者不用关心各个模块的实现细节。
+
+如今 pytorch 已经成为了最流行的深度学习框架， 它最成功的地方便是模块化， 使得上手非常容易， 也符合人们对于新事物的认知习惯。 有时间了我一定要去读一读 pytorch 的源码: https://github.com/pytorch/pytorch.
 
 
 # 开始 hw2!
 
-我们的机器学习框架的模块化架构是这样的:
+我们的深度学习框架的模块化架构是这样的:
 
 ![](https://notes.sjtu.edu.cn/uploads/upload_530ef2e28bd2d1e0a58fe950a6eeda33.png)
 
+我们一步步来完善这个框架。
+
 ## initialization
 
-首先是写几个初始化 Tensor 的函数， 如
+首先来写初始化部分。 
+
+先写几个初始化 Tensor 的函数. 从 10414 的课堂上我们已经知道， 深度学习的初始化还真不是一件无足轻重的事情， 有时候初始化选取的不好， 又没有其他补救措施(如 normalization) 的话， 可能就无法训练下去了。 我们来写这几个经过检验好用的初始化函数:
+
+### Xavier uniform
+
+它的公式是这样的:
+
+从 $\mathcal{U}(-a, a)$ 中采样， 其中
+
+$a = \text{gain} \times \sqrt{\frac{6}{\text{fan\_in} + \text{fan\_out}}}$
+
+其中参数是:
+
++ gain : 可选的配置参数
+
++ fan_in : 输入维度
+
++ fan_out : 输出维度
+
+那就直接实现成这样:
 
 ```python
-def kaiming_normal(fan_in, fan_out, nonlinearity="relu", **kwargs):
-    assert nonlinearity == "relu", "Only relu supported currently"
+def xavier_uniform(fan_in, fan_out, gain=1.0, **kwargs):
+    a = gain * math.sqrt(6 / (fan_in + fan_out))
+    return rand(fan_in, fan_out, low = -a, high = a, **kwargs)
+```
 
-    std = math.sqrt(2 / fan_in)
-    return randn(fan_in, fan_out, mean = 0, std = std, **kwargs)
+`python` 在传参时， 可以在函数原型中用 `*args` 表示接收任意数量的非关键字参数, 并当作一个 `tuple` 传入; `**kwargs` 表示接收任意数量的关键字参数， 并当作一个 `dict` 传入。
+
+这里用到的 `rand` 表示均匀分布， 来自 `init/init_basic.py`:
+
+```python
+def rand(*shape, low=0.0, high=1.0, device=None, dtype="float32", requires_grad=False):
+    """Generate random numbers uniform between low and high"""
+    device = ndl.cpu() if device is None else device
+    array = device.rand(*shape) * (high - low) + low
+    return ndl.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
+```
+
+### Xavier normal
+
+这个初始化方案就是把上一个方案的概率分布从均匀分布改成了正态分布。直接实现成这样:
+
+```python
+def xavier_normal(fan_in, fan_out, gain=1.0, **kwargs):
+    std = gain * math.sqrt(2 / (fan_in + fan_out))
+    return randn(fan_in, fan_out, mea = 0, std = std, **kwargs)
 ```
 
 这里用到的 `randn` 表示正态分布， 来自 `init/init_basic.py`:
@@ -121,4 +168,40 @@ def randn(*shape, mean=0.0, std=1.0, device=None, dtype="float32", requires_grad
     array = device.randn(*shape) * std + mean
     return ndl.Tensor(array, device=device, dtype=dtype, requires_grad=requires_grad)
 ```
+
+### kaiming_uniform
+
+它的公式是这样:
+
+从 $\mathcal{U}(-\text{bound}, \text{bound})$ 中采样， 其中
+
+$\begin{equation}
+\text{bound} = \text{gain} \times \sqrt{\frac{3}{\text{fan\_in}}}
+\end{equation}$
+
+推荐的 `gain` 值 : $\text{gain}=\sqrt{2}$.
+
+所以直接实现成这样:
+
+```python
+def kaiming_uniform(fan_in, fan_out, nonlinearity="relu", **kwargs):
+    assert nonlinearity == "relu", "Only relu supported currently"
+    bound = math.sqrt(6 / fan_in)
+    return rand(fan_in, fan_out, low = -bound, high = bound, **kwargs)
+```
+
+### kaiming_normal
+
+这个初始化方案就是把上一个方案的概率分布从均匀分布改成了正态分布。直接实现成这样:
+
+```python
+def kaiming_normal(fan_in, fan_out, nonlinearity="relu", **kwargs):
+    assert nonlinearity == "relu", "Only relu supported currently"
+    std = math.sqrt(2 / fan_in)
+    return randn(fan_in, fan_out, mean = 0, std = std, **kwargs)
+```
+
+## nn.Module
+
+接下来我们来实现 `nn.Module` 部分， 也是深度学习框架的主体部分。
 
