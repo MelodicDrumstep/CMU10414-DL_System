@@ -111,7 +111,7 @@ softmax_stable(x)
 
 首先来写初始化部分。 
 
-先写几个初始化 Tensor 的函数. 从 10414 的课堂上我们已经知道， 深度学习的初始化还真不是一件无足轻重的事情， 有时候初始化选取的不好， 又没有其他补救措施(如 normalization) 的话， 可能就无法训练下去了。 我们来写这几个经过检验好用的初始化函数:
+先写几个初始化 Tensor 的函数. 从 10414 的课堂上我们已经知道， 深度学习的初始化还真不是一件无足轻重的事情， 有时候初始化选取的不好， 又没有其他补救措施(如 normalization) 的话， 可能就无法训练下去了。 我们来写这几个经过检验好用的初始化函数, 请注意， 这些函数的返回类型都是 `Tensor`。
 
 ### Xavier uniform
 
@@ -203,5 +203,121 @@ def kaiming_normal(fan_in, fan_out, nonlinearity="relu", **kwargs):
 
 ## nn.Module
 
-接下来我们来实现 `nn.Module` 部分， 也是深度学习框架的主体部分。
+接下来我们来实现 `nn.Module` 部分， 也是深度学习框架的主体部分。我们先来阅读一些代码。
+
+### Parameter
+
+我们把 `Paramater` 类设计成了一个 `Tensor` 的派生类:
+
+```python
+# we define the Parameter class as a derived class of Tensor
+class Parameter(Tensor):
+    """A special kind of tensor that represents parameters."""
+```
+ 
+### Module 基类
+
+```python
+# This will return every parameter needed to compute this tensor
+def _unpack_params(value: object) -> List[Tensor]:
+    # if I'm a parameter, return myself
+    if isinstance(value, Parameter):
+        return [value]
+    # if I'm a Module, call the parameter() method
+    # to recursively return a list of paramter of every attribute of myself
+    elif isinstance(value, Module):
+        return value.parameters()
+    # if I'm a dict, iterate all values in this dict and recursively call this method
+    # this will happen when value is Module and call value.pamameters()
+    # because self.__dict__ is a dict of all attributes
+    elif isinstance(value, dict):
+        params = []
+        for k, v in value.items():
+            params += _unpack_params(v)
+        return params
+    # if I'm a tuple, recursively call this function of every elements
+    elif isinstance(value, (list, tuple)):
+        params = []
+        for v in value:
+            params += _unpack_params(v)
+        return params
+    else:
+        return []
+
+# This method will find all Module child object
+def _child_modules(value: object) -> List["Module"]:
+    # if I'm already a Module, add myself to the list
+    # and recursively call this function to the attributes
+    # the extend method of list will add the element in another list into this list
+    if isinstance(value, Module):
+        modules = [value]
+        modules.extend(_child_modules(value.__dict__))
+        return modules
+    # if I'm a dict, recursively call this function to all values in the dict
+    # This can happen when I call this function of a Module and Module will call this function
+    # of its attributes dict
+    if isinstance(value, dict):
+        modules = []
+        for k, v in value.items():
+            modules += _child_modules(v)
+        return modules
+    # if I'm a tuple, recursively call this function to all elements
+    elif isinstance(value, (list, tuple)):
+        modules = []
+        for v in value:
+            modules += _child_modules(v)
+        return modules
+    else:
+        return []
+
+# This is the base class of every Module
+class Module:
+    def __init__(self):
+        # default mode is training
+        self.training = True
+
+    def parameters(self) -> List[Tensor]:
+        """Return the list of parameters in the module."""
+        # self.__dict__ stores the instance's attributes as a dictiornary
+        return _unpack_params(self.__dict__)
+
+    def _children(self) -> List["Module"]:
+        return _child_modules(self.__dict__)
+
+    def eval(self):
+        # Disable training, do not need gradient
+        self.training = False
+        for m in self._children():
+            m.training = False
+
+    def train(self):
+        # Enable training, need gradient
+        self.training = True
+        for m in self._children():
+            m.training = True
+
+    def __call__(self, *args, **kwargs):
+        # the forward function
+        return self.forward(*args, **kwargs)
+```
+
+我们对 `Module` 的实现很简单， 实现了递归获取所有参数的函数和递归获取所有子 `Module` 的函数。
+
+### Identity
+
+一个很简单的例子是 `Identity Module`, 直接实现成这样:
+
+```python
+class Identity(Module):
+    def forward(self, x):
+        return x
+```
+
+因为 `Module` 是建立于 `Tensor` 的抽象之上的， 所以我们可以只实现 `forward` 函数，而不实现 `backward` 函数， `backward` 函数可以直接使用各 `Tensor` 的 `backward` 函数。 但是某些 `Module`（如卷积） 也会需要我们定制整体的 `backward` 函数， 用于提升性能。  
+
+接下来的部分就是需要我们动手去写的了。
+
+### Linear
+
+
 
