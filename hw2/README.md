@@ -313,7 +313,7 @@ class Identity(Module):
         return x
 ```
 
-因为 `Module` 是建立于 `Tensor` 的抽象之上的， 所以我们可以只实现 `forward` 函数，而不实现 `backward` 函数， `backward` 函数可以直接使用各 `Tensor` 的 `backward` 函数。 但是某些 `Module`（如卷积） 也会需要我们定制整体的 `backward` 函数， 用于提升性能。  
+因为 `Module` 是建立于 `Tensor / TensorOp` 的抽象之上的， 所以我们可以只实现 `forward` 函数，而不实现 `backward` 函数， `backward` 函数可以直接使用各 `TensorOp` 的 `backward` 函数。 但是某些 `Module`（如卷积层） 也会需要我们定制特定算子， 实现更加高效的的 `backward` 函数， 用于提升性能。  
 
 接下来的部分就是需要我们动手去写的了。
 
@@ -387,3 +387,45 @@ class Sequential(Module):
 
 ### LogSumExp
 
+这个任务又是写算子了, 是为了 `softmax module` 服务的。 是写这个公式的算子:
+
+$$\text{LogSumExp}(z) = \log (\sum_{i} \exp (z_i - \max{z})) + \max{z}$$
+
+首先是前向传播， 前向传播直接用 `array_api` 的函数就行了， 和梯度无关。
+
+反向传播的部分使用链式法则即可。
+
+算子实现是这样:
+
+```python
+class LogSumExp(TensorOp):
+    def __init__(self, axes: Optional[tuple] = None):
+        self.axes = axes
+
+    def compute(self, Z):
+        ### BEGIN YOUR SOLUTION
+        max_Z_to_be_broadcasted = array_api.max(Z, self.axes, keepdims = True)
+        # This compute the maximum of Z along with the specified axes. And it keeps
+        # the dimension in order to be broadcasted when subtract by Z.
+
+        max_Z_to_be_added = array_api.max(Z, self.axes, keepdims = False)
+        # This compute the maximum of Z along with the specified axes. And it does not keep
+        # the dimension in order to be added to the result
+
+        return array_api.log(array_api.sum(array_api.exp(Z - max_Z_to_be_broadcasted), self.axes)) + max_Z_to_be_added
+        ### END YOUR SOLUTION
+
+    def gradient(self, out_grad, node):
+        ### BEGIN YOUR SOLUTION
+        Z = node.inputs[0]
+        max_Z_to_be_broadcasted = Z.realize_cached_data().max(self.axes, keepdims=True)
+        # This compute the maximum of Z along with the specified axes. And it keeps
+        # the dimension in order to be broadcasted when subtract by Z.
+        
+        Z_after_subtracting_max = exp(Z - max_Z_to_be_broadcasted)
+        Z_sum = summation(Z_after_subtracting_max, self.axes)
+        grad_of_log_part = out_grad / Z_sum
+        grad_of_log_part_after_dimension_adjustment = grad_of_log_part.reshape(max_Z_to_be_broadcasted.shape).broadcast_to(Z.shape)
+        return grad_of_log_part * Z_after_subtracting_max
+        ### END YOUR SOLUTION
+```
