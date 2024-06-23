@@ -213,12 +213,8 @@ def kaiming_normal(fan_in, fan_out, nonlinearity="relu", **kwargs):
 # we define the Parameter class as a derived class of Tensor
 class Parameter(Tensor):
     """A special kind of tensor that represents parameters."""
-```
- 
-### Module 基类
 
-```python
-# This will return every parameter needed to compute this tensor
+    # This will return every parameter needed to compute this tensor
 def _unpack_params(value: object) -> List[Tensor]:
     # if I'm a parameter, return myself
     if isinstance(value, Parameter):
@@ -269,7 +265,11 @@ def _child_modules(value: object) -> List["Module"]:
         return modules
     else:
         return []
+```
+ 
+### Module 基类
 
+```python
 # This is the base class of every Module
 class Module:
     def __init__(self):
@@ -319,5 +319,71 @@ class Identity(Module):
 
 ### Linear
 
+这个就是一个简单的线性层。
 
+```python
+class Linear(Module):
+    def __init__(
+        self, in_features, out_features, bias=True, device=None, dtype="float32"
+    ):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        ### BEGIN YOUR SOLUTION
+        # use kaiming uniform to initialize the parameters
+        self.weight = Parameter(init.kaiming_uniform(in_features, out_features, requires_grad = True))
+        # if bias = False, let self.bias be None
+        if bias == True:
+            self.bias = Parameter(init.kaiming_uniform(out_features, 1, requires_grad = True))
+        else:
+            self.bias = None
+        ### END YOUR SOLUTION
+
+    def forward(self, X: Tensor) -> Tensor:
+        ### BEGIN YOUR SOLUTION
+        # x @ A^T + b
+        xAT = X.matmul(self.weight)
+        if self.bias != None:
+            xAT += self.bias.broadcast_to(xAT.shape)
+        return xAT
+        ### END YOUR SOLUTION
+```
+
+这里任务书中指出, `bias` 的初始化要用 `fan_in = out_features`。 具体原因我并没有太理解， 但是这样维度是不会有问题的， 因为最后前向传播计算时， `broadcast` 会将 `bias` 向量维度调整为 `(N, out_features)`.
+
+### ReLU
+
+```python
+class ReLU(Module):
+    def forward(self, x: Tensor) -> Tensor:
+        ### BEGIN YOUR SOLUTION
+        return needle.ops.relu(x)
+        ### END YOUR SOLUTION
+```
+
+`ReLU Module` 不含参数， 直接用已经定义过的 `ReLU Op` 算子即可。
+
+### Sequential
+
+及多个 `Module` 的线性连接， 实现很简单。
+
+```python
+class Sequential(Module):
+    def __init__(self, *modules):
+        super().__init__()
+        self.modules = modules
+
+    def forward(self, x: Tensor) -> Tensor:
+        ### BEGIN YOUR SOLUTION
+        output = x
+        for module in self.modules:
+            output = module(output)
+        return output
+        ### END YOUR SOLUTION
+```
+
+记得不要直接改输入的 `x`。 `python` 中都是传引用而不是传值， 这样会改到外侧的 `x`.
+
+### LogSumExp
 

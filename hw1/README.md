@@ -2,9 +2,9 @@
 
 ## 目标
 
-我们希望实现怎样的机器学习框架？ 
+我们希望实现怎样的深度学习框架？ 
 
-我们希望用我们的机器学习框架 needle,  `softmax loss` 可以这样写:
+我们希望用我们的深度学习框架 needle,  `softmax loss` 可以这样写:
 
 ```python
 def softmax_loss(Z, I_y):

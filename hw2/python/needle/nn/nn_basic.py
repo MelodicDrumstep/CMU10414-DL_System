@@ -88,12 +88,22 @@ class Linear(Module):
         self.out_features = out_features
 
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        # use kaiming uniform to initialize the parameters
+        self.weight = Parameter(init.kaiming_uniform(in_features, out_features, requires_grad = True))
+        # if bias = False, let self.bias be None
+        if bias == True:
+            self.bias = Parameter(init.kaiming_uniform(out_features, 1, requires_grad = True))
+        else:
+            self.bias = None
         ### END YOUR SOLUTION
 
     def forward(self, X: Tensor) -> Tensor:
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        # x @ A^T + b
+        xAT = X.matmul(self.weight)
+        if self.bias != None:
+            xAT += self.bias.broadcast_to(xAT.shape)
+        return xAT
         ### END YOUR SOLUTION
 
 
@@ -107,7 +117,7 @@ class Flatten(Module):
 class ReLU(Module):
     def forward(self, x: Tensor) -> Tensor:
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        return needle.ops.relu(x)
         ### END YOUR SOLUTION
 
 
@@ -118,7 +128,10 @@ class Sequential(Module):
 
     def forward(self, x: Tensor) -> Tensor:
         ### BEGIN YOUR SOLUTION
-        raise NotImplementedError()
+        output = x
+        for module in self.modules:
+            output = module(output)
+        return output
         ### END YOUR SOLUTION
 
 
